@@ -317,9 +317,27 @@ class ClaimsTreeAutoencoder:
             X = X[valid_mask].copy()
             y = y[valid_mask].copy()
         
+        # IMPORTANT: CatBoost doesn't handle None/NaN in categorical features
+        # Must impute before passing to CatBoost
+        X_cat = X.copy()
+        for col in cat_features:
+            if col in X_cat.columns:
+                if X_cat[col].isna().any():
+                    # For categorical, replace NaN with string 'MISSING'
+                    X_cat[col] = X_cat[col].fillna('MISSING')
+        
+        # Also handle NaN in numerical features
+        for col in X_cat.columns:
+            if col not in cat_features and X_cat[col].isna().any():
+                # For numerical, use median
+                median_val = X_cat[col].median()
+                if pd.isna(median_val):
+                    median_val = 0.0
+                X_cat[col] = X_cat[col].fillna(median_val)
+        
         # Get indices of categorical features
         cat_feature_indices = [
-            X.columns.get_loc(f) for f in cat_features if f in X.columns
+            X_cat.columns.get_loc(f) for f in cat_features if f in X_cat.columns
         ]
         
         # Create and train model
@@ -334,7 +352,7 @@ class ClaimsTreeAutoencoder:
                 cat_features=cat_feature_indices
             )
         
-        model.fit(X, y, verbose=False)
+        model.fit(X_cat, y, verbose=False)
         
         return model
     
@@ -370,16 +388,31 @@ class ClaimsTreeAutoencoder:
                         codes = pd.Categorical(X_pred[col]).codes
                         # Replace -1 (unknown) with 0
                         X_pred[col] = np.where(codes == -1, 0, codes)
+                
+                # Handle NaN in predictor features for XGBoost
+                for col in X_pred.columns:
+                    if X_pred[col].isna().any():
+                        if col in cat_predictors:
+                            # For categorical, use mode (most frequent value)
+                            mode_val = X_pred[col].mode()[0] if not X_pred[col].mode().empty else 0
+                            X_pred[col] = X_pred[col].fillna(mode_val)
+                        else:
+                            # For numerical, use median
+                            median_val = X_pred[col].median()
+                            if pd.isna(median_val):
+                                median_val = 0.0
+                            X_pred[col] = X_pred[col].fillna(median_val)
             
-            # IMPORTANT: Handle NaN in predictor features (same as training)
-            for col in X_pred.columns:
-                if X_pred[col].isna().any():
-                    if col in cat_predictors:
-                        # For categorical, use mode (most frequent value)
-                        mode_val = X_pred[col].mode()[0] if not X_pred[col].mode().empty else 0
-                        X_pred[col] = X_pred[col].fillna(mode_val)
-                    else:
-                        # For numerical, use median
+            elif self.model_type == "catboost":
+                # CatBoost: Replace NaN in categorical with 'MISSING' (same as training)
+                for col in cat_predictors:
+                    if col in X_pred.columns:
+                        if X_pred[col].isna().any():
+                            X_pred[col] = X_pred[col].fillna('MISSING')
+                
+                # Handle NaN in numerical features for CatBoost
+                for col in X_pred.columns:
+                    if col not in cat_predictors and X_pred[col].isna().any():
                         median_val = X_pred[col].median()
                         if pd.isna(median_val):
                             median_val = 0.0
@@ -422,7 +455,19 @@ class ClaimsTreeAutoencoder:
             
             if feature_name in self.categorical_features:
                 # Classification error (0 = correct, 1 = incorrect)
-                # Handle NaN in actual values - treat as always incorrect
+                # CatBoost may return probabilities, need to get class predictions
+                if predicted.ndim > 1:
+                    # If probabilities returned, get argmax for class prediction
+                    predicted = predicted.argmax(axis=1)
+                
+                # Convert actual categorical values to numeric for comparison
+                # (predictions are already numeric from model)
+                if not pd.api.types.is_numeric_dtype(actual):
+                    actual_codes = pd.Categorical(actual).codes
+                    # Replace -1 (NaN) with a high value so it's always "incorrect"
+                    actual = np.where(actual_codes == -1, 99999, actual_codes)
+                
+                # Handle remaining NaN in actual values - treat as always incorrect
                 error = np.where(pd.isna(actual), 1.0, (actual != predicted).astype(float))
             else:
                 # Regression error (squared difference)
