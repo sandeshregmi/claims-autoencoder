@@ -1,0 +1,157 @@
+# Starter Configuration - Single Training File
+# Use this when you only have one data file and want auto-splitting
+
+data:
+  train_path: "data/claims_train.parquet"
+  val_path: null  # Will auto-split from train_path
+  test_path: null  # Will auto-split from train_path
+  
+  numerical_features:
+    - claim_amount
+    - patient_age
+    - provider_experience_years
+    - days_since_last_claim
+    - num_previous_claims
+    - average_claim_amount
+    - claim_duration_days
+    
+  categorical_features:
+    - claim_type
+    - provider_specialty
+    - diagnosis_code
+    - procedure_code
+    - patient_gender
+    - geographic_region
+    
+  handle_missing: "median"
+  
+  outlier_treatment:
+    enabled: true
+    method: "iqr"
+    threshold: 3.0
+  
+  feature_interactions:
+    enabled: true
+    pairs:
+      - [claim_amount, patient_age]
+      - [num_previous_claims, average_claim_amount]
+  
+  split_ratios:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+
+model:
+  encoding_dim: 32
+  hidden_layers: [128, 64]
+  activation: "relu"
+  dropout_rate: 0.3
+  batch_norm: true
+  anomaly_threshold_percentile: 95
+
+training:
+  batch_size: 256
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  optimizer: "adam"
+  
+  lr_scheduler:
+    enabled: true
+    type: "reduce_on_plateau"
+    patience: 10
+    factor: 0.5
+    min_lr: 0.00001
+  
+  max_epochs: 50  # Reduced for faster training
+  
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.001
+    monitor: "val_loss"
+  
+  gradient_clip_val: 1.0
+  seed: 42
+  deterministic: true
+  accelerator: "auto"
+  devices: 1
+  precision: "32"
+
+mlflow:
+  enabled: true
+  tracking_uri: "mlruns"
+  experiment_name: "claims_autoencoder"
+  run_name: null
+  log_params: true
+  log_metrics: true
+  log_artifacts: true
+  log_model: true
+  tags:
+    project: "fraud_detection"
+    team: "data_science"
+    environment: "development"
+
+evaluation:
+  metrics:
+    - reconstruction_error
+    - anomaly_detection_rate
+    - precision_at_k
+    - recall_at_k
+  k_values: [10, 50, 100]
+  plot_distributions: true
+  plot_roc_curve: true
+  save_plots: true
+  plots_dir: "outputs/plots"
+
+monitoring:
+  psi:
+    enabled: true
+    num_bins: 10
+    thresholds:
+      minor: 0.1
+      major: 0.2
+  drift_detection:
+    enabled: true
+    check_frequency: "daily"
+    alert_threshold: 0.2
+
+batch_scoring:
+  chunk_size: 10000
+  num_workers: 4
+  save_reconstructions: false
+  output_format: "parquet"
+
+hyperparameter_tuning:
+  enabled: false
+  n_trials: 50
+  timeout: 3600
+  search_space:
+    encoding_dim: [16, 32, 64, 128]
+    hidden_layers:
+      - [64]
+      - [128, 64]
+      - [256, 128, 64]
+    dropout_rate: [0.1, 0.2, 0.3, 0.4, 0.5]
+    learning_rate: [0.0001, 0.001, 0.01]
+    batch_size: [128, 256, 512]
+  direction: "minimize"
+  metric: "val_loss"
+  pruner: "median"
+
+logging:
+  level: "INFO"
+  log_file: "logs/training.log"
+  log_to_console: true
+  log_to_file: true
+
+paths:
+  data_dir: "data"
+  models_dir: "models"
+  outputs_dir: "outputs"
+  logs_dir: "logs"
+  checkpoints_dir: "checkpoints"
+
+feature_store:
+  enabled: false
+  backend: "local"
+  cache_ttl: 3600

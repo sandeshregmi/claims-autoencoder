@@ -1,0 +1,50 @@
+"""Fix for older XGBoost compatibility - Apply this patch"""
+
+# In src/tree_models.py, replace the _train_xgboost method (around line 214) with this version:
+
+def _train_xgboost(
+    self,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cat_features: List[str],
+    target_name: str
+):
+    """Train XGBoost model for a single feature."""
+    is_categorical = target_name in self.categorical_features
+    
+    # Convert categorical columns to numeric codes (compatible with all XGBoost versions)
+    X_cat = X.copy()
+    for col in cat_features:
+        if col in X_cat.columns:
+            # Convert to numeric codes instead of category dtype
+            X_cat[col] = pd.Categorical(X_cat[col]).codes
+    
+    # Determine objective and create model
+    if is_categorical:
+        n_classes = y.nunique()
+        # Convert target to numeric if categorical
+        y = pd.Categorical(y).codes
+        
+        if n_classes == 2:
+            objective = "binary:logistic"
+            params = {**self.model_params, 'objective': objective}
+            params.pop('num_class', None)
+            model = xgb.XGBClassifier(**params)
+        else:
+            objective = "multi:softprob"
+            params = {
+                **self.model_params,
+                'objective': objective,
+                'num_class': n_classes
+            }
+            model = xgb.XGBClassifier(**params)
+    else:
+        # Regression
+        params = {**self.model_params, 'objective': 'reg:squarederror'}
+        params.pop('num_class', None)
+        model = xgb.XGBRegressor(**params)
+    
+    # Train model (no enable_categorical needed)
+    model.fit(X_cat, y, verbose=False)
+    
+    return model
