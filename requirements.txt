@@ -37,6 +37,9 @@ optuna>=3.3.0
 xgboost>=2.0.0
 catboost>=1.2.0
 
+# Explainability (SHAP)
+shap>=0.42.0
+
 # Development
 pytest>=7.4.0
 pytest-cov>=4.1.0
