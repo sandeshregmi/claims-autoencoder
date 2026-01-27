@@ -1,0 +1,369 @@
+    # Tab: Fairness Analysis
+    with tab_fairness:
+        st.header("⚖️ Fairness Analysis - Bias Detection")
+        st.markdown("""
+        **Fairness Analysis** ensures the fraud detection model treats all groups equitably.
+        
+        **Key Metrics:**
+        - **Disparate Impact Ratio**: Should be between 0.8 and 1.25 (close to 1.0 = fair)
+        - **Flag Rate Parity**: Similar fraud flag rates across groups
+        - **Statistical Significance**: p-value > 0.05 indicates no significant bias
+        
+        **Protected Attributes:** Gender, Age, Geographic Region, etc.
+        """)
+        
+        if st.session_state.data is None or st.session_state.fraud_scores is None:
+            st.info("👈 Please load data and compute fraud scores first")
+            
+            st.markdown("""
+            ### Why Fairness Matters
+            
+            - **Legal Compliance**: Avoid discriminatory practices
+            - **Ethical AI**: Ensure fair treatment of all individuals
+            - **Reputation**: Build trust with stakeholders
+            - **Effectiveness**: Unbiased models perform better
+            
+            ### How It Works
+            
+            1. Select protected attributes (e.g., gender, age)
+            2. Set fraud detection threshold
+            3. Analyze flag rates across groups
+            4. Review disparate impact ratios
+            5. Take action if bias detected
+            """)
+        else:
+            # Configuration
+            st.subheader("⚙️ Configuration")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Select protected attributes
+                available_attributes = []
+                
+                # Detect potential protected attributes
+                potential_attrs = [
+                    'patient_gender', 'gender',
+                    'patient_age', 'age', 'age_group', 'patient_age_group',
+                    'geographic_region', 'region', 'state',
+                    'race', 'ethnicity',
+                    'income_level', 'socioeconomic_status'
+                ]
+                
+                for attr in potential_attrs:
+                    if attr in st.session_state.data.columns:
+                        available_attributes.append(attr)
+                
+                if not available_attributes:
+                    st.warning("No protected attributes found in data. Using all categorical features.")
+                    available_attributes = st.session_state.data.select_dtypes(include=['object', 'category']).columns.tolist()[:5]
+                
+                selected_attributes = st.multiselect(
+                    "Select Protected Attributes",
+                    options=available_attributes,
+                    default=available_attributes[:min(3, len(available_attributes))],
+                    help="Attributes to analyze for fairness (e.g., gender, age, region)"
+                )
+            
+            with col2:
+                threshold_pct = st.slider(
+                    "Fraud Detection Threshold (Percentile)",
+                    min_value=90.0,
+                    max_value=99.9,
+                    value=95.0,
+                    step=0.5,
+                    help="Claims above this percentile are flagged as potentially fraudulent"
+                )
+            
+            st.markdown("---")
+            
+            # Run Fairness Analysis
+            if st.button("⚖️ Run Fairness Analysis", type="primary"):
+                if not selected_attributes:
+                    st.error("Please select at least one protected attribute")
+                else:
+                    with st.spinner("Analyzing fairness across groups..."):
+                        try:
+                            from src.fairness_analysis import FairnessAnalyzer
+                            
+                            # Initialize analyzer
+                            analyzer = FairnessAnalyzer(
+                                data=st.session_state.data,
+                                fraud_scores=st.session_state.fraud_scores,
+                                protected_attributes=selected_attributes,
+                                threshold_percentile=threshold_pct
+                            )
+                            
+                            # Store in session state
+                            st.session_state.fairness_analyzer = analyzer
+                            st.session_state.fairness_results = analyzer.analyze_all_attributes()
+                            
+                            st.success("✅ Fairness analysis complete!")
+                            
+                        except Exception as e:
+                            st.error(f"Error running fairness analysis: {str(e)}")
+                            import traceback
+                            with st.expander("Debug Info"):
+                                st.code(traceback.format_exc())
+            
+            # Display results if available
+            if hasattr(st.session_state, 'fairness_results') and st.session_state.fairness_results:
+                results = st.session_state.fairness_results
+                analyzer = st.session_state.fairness_analyzer
+                
+                st.markdown("---")
+                st.subheader("📊 Fairness Overview")
+                
+                # Bias Summary Table
+                bias_summary = analyzer.get_bias_summary()
+                
+                if not bias_summary.empty:
+                    # Overall fairness status
+                    all_fair = bias_summary['is_fair'].all()
+                    
+                    if all_fair:
+                        st.success("✅ **No significant bias detected** across protected attributes")
+                    else:
+                        biased_attrs = bias_summary[~bias_summary['is_fair']]['attribute'].tolist()
+                        st.error(f"⚠️ **Potential bias detected** in: {', '.join(biased_attrs)}")
+                    
+                    # Summary metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric(
+                            "Attributes Analyzed",
+                            len(bias_summary),
+                            help="Number of protected attributes checked"
+                        )
+                    
+                    with col2:
+                        fair_count = bias_summary['is_fair'].sum()
+                        st.metric(
+                            "Fair Attributes",
+                            fair_count,
+                            help="Attributes with no significant bias"
+                        )
+                    
+                    with col3:
+                        biased_count = (~bias_summary['is_fair']).sum()
+                        st.metric(
+                            "Biased Attributes",
+                            biased_count,
+                            help="Attributes with potential bias",
+                            delta_color="inverse"
+                        )
+                    
+                    with col4:
+                        avg_fairness = bias_summary['fairness_score'].mean()
+                        st.metric(
+                            "Avg Fairness Score",
+                            f"{avg_fairness:.3f}",
+                            help="1.0 = perfectly fair, closer to 1.0 is better"
+                        )
+                    
+                    # Detailed summary table
+                    st.markdown("---")
+                    st.subheader("📋 Fairness Summary by Attribute")
+                    
+                    display_summary = bias_summary.copy()
+                    display_summary['fairness_status'] = display_summary['is_fair'].apply(
+                        lambda x: '✅ Fair' if x else '⚠️ Biased'
+                    )
+                    display_summary = display_summary[[
+                        'attribute', 'num_groups', 'min_di_ratio', 'max_di_ratio',
+                        'fairness_score', 'fairness_status'
+                    ]]
+                    display_summary.columns = [
+                        'Attribute', 'Groups', 'Min DI Ratio', 'Max DI Ratio',
+                        'Fairness Score', 'Status'
+                    ]
+                    
+                    st.dataframe(display_summary, use_container_width=True, height=300)
+                    
+                    st.info("""
+                    **Disparate Impact (DI) Ratio Guide:**
+                    - 0.8 to 1.25: ✅ Acceptable (fair)
+                    - < 0.8 or > 1.25: ⚠️ Potential bias
+                    - = 1.0: Perfect parity
+                    """)
+                
+                # Detailed Analysis per Attribute
+                st.markdown("---")
+                st.subheader("🔍 Detailed Analysis")
+                
+                selected_attr = st.selectbox(
+                    "Select Attribute for Detailed View",
+                    options=list(results.keys()),
+                    help="View detailed fairness metrics for specific attribute"
+                )
+                
+                if selected_attr and selected_attr in results:
+                    attr_results = results[selected_attr]
+                    
+                    if 'error' not in attr_results:
+                        # Group comparison table
+                        st.markdown(f"### 📊 Group Comparison: {selected_attr}")
+                        
+                        comparison_df = analyzer.get_detailed_comparison(selected_attr)
+                        
+                        if not comparison_df.empty:
+                            # Format for display
+                            display_df = comparison_df.copy()
+                            display_df['flag_rate'] = display_df['flag_rate'].apply(lambda x: f"{x*100:.2f}%")
+                            display_df['avg_score'] = display_df['avg_score'].apply(lambda x: f"{x:,.0f}")
+                            display_df['median_score'] = display_df['median_score'].apply(lambda x: f"{x:,.0f}")
+                            display_df['p95_score'] = display_df['p95_score'].apply(lambda x: f"{x:,.0f}")
+                            display_df['p99_score'] = display_df['p99_score'].apply(lambda x: f"{x:,.0f}")
+                            
+                            display_df.columns = [
+                                'Group', 'Count', 'Flagged', 'Flag Rate (%)',
+                                'Avg Score', 'Median Score', 'P95 Score', 'P99 Score'
+                            ]
+                            
+                            st.dataframe(display_df, use_container_width=True)
+                            
+                            # Visualizations
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                # Flag rate comparison
+                                fig_flag = go.Figure(go.Bar(
+                                    x=comparison_df['group'],
+                                    y=comparison_df['flag_rate'] * 100,
+                                    marker_color='steelblue',
+                                    text=[f"{v*100:.1f}%" for v in comparison_df['flag_rate']],
+                                    textposition='outside'
+                                ))
+                                
+                                fig_flag.update_layout(
+                                    title=f"Flag Rate by {selected_attr}",
+                                    xaxis_title="Group",
+                                    yaxis_title="Flag Rate (%)",
+                                    height=400
+                                )
+                                
+                                st.plotly_chart(fig_flag, use_container_width=True, key=f"flag_rate_{selected_attr}")
+                            
+                            with col2:
+                                # Average score comparison
+                                fig_score = go.Figure(go.Bar(
+                                    x=comparison_df['group'],
+                                    y=comparison_df['avg_score'],
+                                    marker_color='coral',
+                                    text=[f"{v:,.0f}" for v in comparison_df['avg_score']],
+                                    textposition='outside'
+                                ))
+                                
+                                fig_score.update_layout(
+                                    title=f"Avg Fraud Score by {selected_attr}",
+                                    xaxis_title="Group",
+                                    yaxis_title="Average Score",
+                                    height=400
+                                )
+                                
+                                st.plotly_chart(fig_score, use_container_width=True, key=f"avg_score_{selected_attr}")
+                        
+                        # Pairwise Comparisons
+                        if 'pairwise_comparisons' in attr_results and attr_results['pairwise_comparisons']:
+                            st.markdown("### 🔄 Pairwise Comparisons")
+                            
+                            comparisons = attr_results['pairwise_comparisons']
+                            
+                            for comp in comparisons:
+                                with st.expander(f"{comp['group_a']} vs {comp['group_b']}", expanded=False):
+                                    col1, col2, col3 = st.columns(3)
+                                    
+                                    with col1:
+                                        st.metric(
+                                            f"{comp['group_a']} Flag Rate",
+                                            f"{comp['rate_a']*100:.2f}%"
+                                        )
+                                    
+                                    with col2:
+                                        st.metric(
+                                            f"{comp['group_b']} Flag Rate",
+                                            f"{comp['rate_b']*100:.2f}%"
+                                        )
+                                    
+                                    with col3:
+                                        di_ratio = comp['disparate_impact_ratio']
+                                        is_fair = comp['is_fair']
+                                        
+                                        st.metric(
+                                            "DI Ratio",
+                                            f"{di_ratio:.3f}",
+                                            delta="✅ Fair" if is_fair else "⚠️ Biased"
+                                        )
+                                    
+                                    # Statistical test results
+                                    st.markdown("**Statistical Test:**")
+                                    st.write(f"- Chi-square: {comp['chi_square']:.2f}")
+                                    st.write(f"- p-value: {comp['p_value']:.4f}")
+                                    st.write(f"- Effect size (Cohen's h): {comp['effect_size_h']:.3f}")
+                                    
+                                    if comp['p_value'] < 0.05:
+                                        st.warning("⚠️ Statistically significant difference detected (p < 0.05)")
+                                    else:
+                                        st.success("✅ No statistically significant difference (p ≥ 0.05)")
+                    
+                    # Recommendations
+                    st.markdown("---")
+                    st.subheader("💡 Recommendations")
+                    
+                    if 'overall_metrics' in attr_results and attr_results['overall_metrics']:
+                        if attr_results['overall_metrics']['is_fair']:
+                            st.success(f"""
+                            **✅ {selected_attr.upper()} APPEARS FAIR**
+                            
+                            - All disparate impact ratios within acceptable range (0.8-1.25)
+                            - No significant statistical differences detected
+                            - Continue regular monitoring
+                            """)
+                        else:
+                            st.error(f"""
+                            **⚠️ POTENTIAL BIAS IN {selected_attr.upper()}**
+                            
+                            **Immediate Actions:**
+                            1. Review flagged cases from affected groups
+                            2. Investigate root causes of disparity
+                            3. Consider threshold adjustments
+                            4. Retrain model with fairness constraints
+                            
+                            **Long-term Solutions:**
+                            - Collect more diverse training data
+                            - Use fairness-aware algorithms
+                            - Implement bias mitigation techniques
+                            - Regular fairness audits
+                            """)
+                
+                # Export Report
+                st.markdown("---")
+                st.subheader("📄 Export Fairness Report")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Download summary CSV
+                    if not bias_summary.empty:
+                        csv_summary = bias_summary.to_csv(index=False)
+                        st.download_button(
+                            "📥 Download Fairness Summary (CSV)",
+                            csv_summary,
+                            "fairness_summary.csv",
+                            "text/csv",
+                            help="Download summary of fairness metrics"
+                        )
+                
+                with col2:
+                    # Download detailed report
+                    if selected_attr:
+                        report_text = analyzer.generate_fairness_report(selected_attr)
+                        st.download_button(
+                            f"📥 Download {selected_attr} Report (TXT)",
+                            report_text,
+                            f"fairness_report_{selected_attr}.txt",
+                            "text/plain",
+                            help="Download detailed fairness analysis report"
+                        )
+    

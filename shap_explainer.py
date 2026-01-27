@@ -184,6 +184,9 @@ class ClaimsShapExplainer:
             'abs_shap': np.abs(shap_values)
         }).sort_values('abs_shap', ascending=False)
         
+        # Fix PyArrow type conversion error by ensuring 'value' column is string type
+        contributions['value'] = contributions['value'].astype(str)
+        
         # Plot if requested
         if plot:
             self._plot_waterfall(
@@ -266,34 +269,66 @@ class ClaimsShapExplainer:
         all_importances = []
         
         for target_feature in self.feature_names:
-            explainer_info = self.explainers[target_feature]
-            predictor_features = explainer_info['predictor_features']
-            explainer = explainer_info['explainer']
-            
-            # Prepare data
-            X_pred = X[predictor_features].copy()
-            X_pred = self._preprocess_for_model(X_pred, predictor_features)
-            
-            # Compute SHAP values
-            shap_values = explainer.shap_values(X_pred)
-            
-            # Handle multi-class
-            if isinstance(shap_values, list):
-                shap_values = shap_values[0]  # Use first class
-            
-            # Average absolute SHAP values
-            mean_abs_shap = np.abs(shap_values).mean(axis=0)
-            
-            for i, feature in enumerate(predictor_features):
-                all_importances.append({
-                    'target_feature': target_feature,
-                    'predictor_feature': feature,
-                    'mean_abs_shap': mean_abs_shap[i]
-                })
+            try:
+                explainer_info = self.explainers[target_feature]
+                predictor_features = explainer_info['predictor_features']
+                explainer = explainer_info['explainer']
+                
+                # Prepare data
+                X_pred = X[predictor_features].copy()
+                X_pred = self._preprocess_for_model(X_pred, predictor_features)
+                
+                # Compute SHAP values
+                shap_values = explainer.shap_values(X_pred)
+                
+                # Handle multi-class - take first class or flatten
+                if isinstance(shap_values, list):
+                    shap_values = shap_values[0]
+                
+                # Ensure 2D array (samples x features)
+                if shap_values.ndim == 1:
+                    # Single sample - reshape to (1, n_features)
+                    shap_values = shap_values.reshape(1, -1)
+                elif shap_values.ndim > 2:
+                    # More than 2D - take first dimension
+                    shap_values = shap_values[0]
+                
+                # Verify shapes match
+                if shap_values.shape[1] != len(predictor_features):
+                    logger.warning(
+                        f"Shape mismatch for {target_feature}: "
+                        f"SHAP has {shap_values.shape[1]} features but expected {len(predictor_features)}"
+                    )
+                    continue
+                
+                # Average absolute SHAP values across samples
+                mean_abs_shap = np.abs(shap_values).mean(axis=0)
+                
+                # Add each feature's importance
+                for i, feature in enumerate(predictor_features):
+                    if i < len(mean_abs_shap):  # Safety check
+                        all_importances.append({
+                            'target_feature': target_feature,
+                            'predictor_feature': feature,
+                            'mean_abs_shap': float(mean_abs_shap[i])  # Ensure scalar
+                        })
+                        
+            except Exception as e:
+                logger.warning(f"Error computing SHAP for target {target_feature}: {e}")
+                continue
+        
+        if not all_importances:
+            raise ValueError("Failed to compute SHAP values for any features")
         
         importance_df = pd.DataFrame(all_importances)
         
-        # Aggregate across all targets
+        # Ensure mean_abs_shap is numeric
+        importance_df['mean_abs_shap'] = pd.to_numeric(importance_df['mean_abs_shap'], errors='coerce')
+        
+        # Drop any NaN values
+        importance_df = importance_df.dropna(subset=['mean_abs_shap'])
+        
+        # Aggregate across all targets using numeric mean
         global_importance = importance_df.groupby('predictor_feature')['mean_abs_shap'].mean()
         global_importance = global_importance.sort_values(ascending=False)
         
