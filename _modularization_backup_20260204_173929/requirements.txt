@@ -1,0 +1,48 @@
+# Core ML Libraries
+torch>=2.0.0
+pytorch-lightning>=2.0.0
+scikit-learn>=1.3.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Data Processing
+pyarrow>=12.0.0
+fastparquet>=2023.4.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+
+# Monitoring & Tracking
+mlflow>=2.5.0
+tensorboard>=2.13.0
+
+# Configuration
+pyyaml>=6.0
+pydantic>=2.0.0
+
+# Web Interface
+streamlit>=1.25.0
+streamlit-option-menu>=0.3.6
+
+# Utilities
+tqdm>=4.65.0
+python-dotenv>=1.0.0
+
+# Hyperparameter Tuning
+optuna>=3.3.0
+
+# Tree-Based Models for Fraud Detection
+xgboost>=2.0.0
+catboost>=1.2.0
+
+# Explainability (SHAP)
+shap>=0.42.0
+
+# Development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.7.0
+flake8>=6.1.0
+mypy>=1.4.0

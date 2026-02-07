@@ -1,0 +1,109 @@
+name: CD - Deploy to DEV
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      run_training:
+        description: 'Run training job after deployment'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  deploy-to-dev:
+    runs-on: ubuntu-latest
+    environment: dev
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install Databricks CLI
+        run: |
+          pip install databricks-cli
+      
+      - name: Configure Databricks CLI
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_DEV }}
+        run: |
+          # Create config file
+          mkdir -p ~/.databrickscfg
+          cat > ~/.databrickscfg << EOF
+          [DEFAULT]
+          host = ${DATABRICKS_HOST}
+          token = ${DATABRICKS_TOKEN}
+          EOF
+          
+          echo "✅ Databricks CLI configured"
+      
+      - name: Validate bundle before deployment
+        run: |
+          databricks bundle validate --target dev
+          echo "✅ Bundle validation passed"
+      
+      - name: Deploy to DEV
+        run: |
+          databricks bundle deploy --target dev
+          echo "✅ Deployed to DEV environment"
+      
+      - name: List deployed jobs
+        run: |
+          echo "## Deployed Jobs" >> $GITHUB_STEP_SUMMARY
+          databricks jobs list --output json | \
+            jq -r '.jobs[] | select(.settings.name | contains("Claims Fraud")) | "- \(.settings.name) (ID: \(.job_id))"' \
+            >> $GITHUB_STEP_SUMMARY
+      
+      - name: Run smoke test
+        if: success()
+        run: |
+          # Verify jobs were created
+          job_count=$(databricks jobs list --output json | \
+            jq '[.jobs[] | select(.settings.name | contains("Claims Fraud"))] | length')
+          
+          if [ "$job_count" -ge 3 ]; then
+            echo "✅ Smoke test passed: $job_count jobs found"
+            echo "✅ Smoke test: $job_count jobs created" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Smoke test failed: Only $job_count jobs found"
+            exit 1
+          fi
+      
+      - name: Run training job (optional)
+        if: github.event.inputs.run_training == 'true'
+        run: |
+          echo "🚀 Starting training job..."
+          run_id=$(databricks bundle run model_training_job --target dev --output json | jq -r '.run_id')
+          echo "Training job started: Run ID $run_id"
+          echo "🔗 View run: ${DATABRICKS_HOST}/#job/runs/$run_id" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** DEV" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Notify on Slack (optional)
+        if: always() && vars.SLACK_WEBHOOK != ''
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            DEV Deployment ${{ job.status }}
+            Commit: ${{ github.sha }}
+            By: ${{ github.actor }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

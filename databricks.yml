@@ -1,0 +1,109 @@
+bundle:
+  name: claims-fraud-detection
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: dbc-d4506e69-bbc8.cloud.databricks.com
+      profile: sregmi
+
+resources:
+  jobs:
+    model_training_job:
+      name: "[${bundle.target}] Training Pipeline - All Models"
+      
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: "America/Los_Angeles"
+        pause_status: PAUSED
+      
+      email_notifications:
+        on_success:
+          - sandeshregmi@gmail.com
+        on_failure:
+          - sandeshregmi@gmail.com
+      
+      max_concurrent_runs: 1
+      timeout_seconds: 10800  # 3 hours
+      
+      tasks:
+        # Step 1: Prepare data
+        - task_key: prepare_data
+          notebook_task:
+            notebook_path: notebooks/prepare_data.py
+            source: WORKSPACE
+          timeout_seconds: 600
+        
+        # Step 2: Train all 3 models in PARALLEL
+        - task_key: train_catboost
+          depends_on:
+            - task_key: prepare_data
+          notebook_task:
+            notebook_path: notebooks/train_catboost.py
+            source: WORKSPACE
+          timeout_seconds: 3600
+        
+        - task_key: train_xgboost
+          depends_on:
+            - task_key: prepare_data
+          notebook_task:
+            notebook_path: notebooks/train_xgboost.py
+            source: WORKSPACE
+          timeout_seconds: 3600
+        
+        - task_key: train_ft_transformer
+          depends_on:
+            - task_key: prepare_data
+          notebook_task:
+            notebook_path: notebooks/train_ft_transformer.py
+            source: WORKSPACE
+          timeout_seconds: 3600
+        
+        # Step 3: Evaluate all models
+        - task_key: evaluate_models
+          depends_on:
+            - task_key: train_catboost
+            - task_key: train_xgboost
+            - task_key: train_ft_transformer
+          notebook_task:
+            notebook_path: notebooks/evaluate_models.py
+            source: WORKSPACE
+        
+        # Step 4: Fairness and PSI in PARALLEL
+        - task_key: fairness_analysis
+          depends_on:
+            - task_key: evaluate_models
+          notebook_task:
+            notebook_path: notebooks/fairness_analysis.py
+            source: WORKSPACE
+        
+        - task_key: psi_monitoring
+          depends_on:
+            - task_key: evaluate_models
+          notebook_task:
+            notebook_path: notebooks/psi_monitoring.py
+            source: WORKSPACE
+        
+        # Step 5: Register model
+        - task_key: register_model
+          depends_on:
+            - task_key: fairness_analysis
+            - task_key: psi_monitoring
+          notebook_task:
+            notebook_path: notebooks/register_model.py
+            source: WORKSPACE
+        
+        # Step 6: Downstream analysis
+        - task_key: downstream_analysis
+          depends_on:
+            - task_key: register_model
+          notebook_task:
+            notebook_path: notebooks/downstream_analysis.py
+            source: WORKSPACE
+      
+      tags:
+        environment: ${bundle.target}
+        project: claims-fraud-detection
+        pipeline: training

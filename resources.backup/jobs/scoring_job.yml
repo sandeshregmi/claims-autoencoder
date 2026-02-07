@@ -1,0 +1,143 @@
+# Batch Scoring Job Configuration
+# Scores new claims data using the registered model
+
+resources:
+  jobs:
+    batch_scoring_job:
+      name: "[${bundle.target}] Claims Fraud - Batch Scoring"
+      
+      # Job configuration
+      max_concurrent_runs: 3  # Allow multiple concurrent scoring runs
+      timeout_seconds: 3600  # 1 hour
+      
+      # Email notifications
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.notification_email}
+      
+      # Tasks
+      tasks:
+        # ========================================
+        # Task 1: Load and Prepare Data
+        # ========================================
+        - task_key: prepare_scoring_data
+          job_cluster_key: scoring_cluster
+          
+          libraries:
+            - pypi:
+                package: pandas>=2.0.0
+            - pypi:
+                package: pyarrow>=14.0.0
+          
+          spark_python_task:
+            python_file: src/batch_scoring/prepare_data.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --input-table
+              - ${var.catalog}.${var.schema}.claims_raw
+              - --output-table
+              - ${var.catalog}.${var.schema}.claims_prepared
+          
+          timeout_seconds: 900  # 15 minutes
+        
+        # ========================================
+        # Task 2: Score Claims
+        # ========================================
+        - task_key: score_claims
+          depends_on:
+            - task_key: prepare_scoring_data
+          
+          job_cluster_key: scoring_cluster
+          
+          libraries:
+            - pypi:
+                package: mlflow>=2.9.0
+            - pypi:
+                package: catboost>=1.2.0
+            - pypi:
+                package: xgboost>=2.0.0
+          
+          spark_python_task:
+            python_file: src/batch_scoring/score.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --input-table
+              - ${var.catalog}.${var.schema}.claims_prepared
+              - --output-table
+              - ${var.catalog}.${var.schema}.fraud_scores
+              - --model-name
+              - ${var.model_name}
+              - --model-stage
+              - Production
+          
+          timeout_seconds: 1800  # 30 minutes
+        
+        # ========================================
+        # Task 3: Generate Summary Report
+        # ========================================
+        - task_key: generate_report
+          depends_on:
+            - task_key: score_claims
+          
+          job_cluster_key: scoring_cluster
+          
+          spark_python_task:
+            python_file: src/batch_scoring/report.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --scores-table
+              - ${var.catalog}.${var.schema}.fraud_scores
+              - --output-table
+              - ${var.catalog}.${var.schema}.scoring_summary
+          
+          timeout_seconds: 300  # 5 minutes
+      
+      # Job cluster
+      job_clusters:
+        - job_cluster_key: scoring_cluster
+          new_cluster:
+            cluster_name: ""
+            spark_version: ${var.cluster_spark_version}
+            node_type_id: ${var.cluster_node_type}
+            num_workers: 2
+            
+            autoscale:
+              min_workers: 2
+              max_workers: 6
+            
+            spark_conf:
+              spark.databricks.delta.preview.enabled: "true"
+              spark.sql.adaptive.enabled: "true"
+            
+            autotermination_minutes: 10
+            
+            # Cost optimization
+            aws_attributes:
+              first_on_demand: 1
+              availability: SPOT_WITH_FALLBACK
+              zone_id: auto
+              spot_bid_price_percent: 100
+      
+      # Schedule - Run every 6 hours
+      schedule:
+        quartz_cron_expression: "0 0 */6 * * ?"  # Every 6 hours
+        timezone_id: "America/Los_Angeles"
+        pause_status: ${bundle.target == "dev" ? "PAUSED" : "UNPAUSED"}
+      
+      # Tags
+      tags:
+        Environment: ${bundle.target}
+        Project: claims-fraud-detection
+        Team: ml-engineering
+        Purpose: batch-scoring

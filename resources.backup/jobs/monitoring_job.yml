@@ -1,0 +1,180 @@
+# Monitoring Job Configuration
+# Continuous monitoring for drift detection and fairness validation
+
+resources:
+  jobs:
+    monitoring_job:
+      name: "[${bundle.target}] Claims Fraud - Monitoring"
+      
+      # Job configuration
+      max_concurrent_runs: 1
+      timeout_seconds: 1800  # 30 minutes
+      
+      # Email notifications
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.notification_email}
+      
+      # Tasks
+      tasks:
+        # ========================================
+        # Task 1: PSI Drift Detection
+        # ========================================
+        - task_key: psi_drift_detection
+          job_cluster_key: monitoring_cluster
+          
+          libraries:
+            - pypi:
+                package: scipy>=1.11.0
+            - pypi:
+                package: numpy>=1.24.0
+            - pypi:
+                package: pandas>=2.0.0
+          
+          spark_python_task:
+            python_file: src/monitoring/psi_check.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --reference-table
+              - ${var.catalog}.${var.schema}.training_data
+              - --current-table
+              - ${var.catalog}.${var.schema}.claims_raw
+              - --alert-threshold
+              - "0.2"
+              - --output-table
+              - ${var.catalog}.${var.schema}.drift_monitoring
+          
+          timeout_seconds: 900  # 15 minutes
+        
+        # ========================================
+        # Task 2: Fairness Monitoring
+        # ========================================
+        - task_key: fairness_monitoring
+          job_cluster_key: monitoring_cluster
+          
+          libraries:
+            - pypi:
+                package: scipy>=1.11.0
+            - pypi:
+                package: numpy>=1.24.0
+            - pypi:
+                package: pandas>=2.0.0
+          
+          spark_python_task:
+            python_file: src/monitoring/fairness_check.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --scores-table
+              - ${var.catalog}.${var.schema}.fraud_scores
+              - --protected-attributes
+              - patient_gender,geographic_region,patient_age_group
+              - --threshold-percentile
+              - "95.0"
+              - --output-table
+              - ${var.catalog}.${var.schema}.fairness_monitoring
+          
+          timeout_seconds: 900  # 15 minutes
+        
+        # ========================================
+        # Task 3: Model Performance Tracking
+        # ========================================
+        - task_key: performance_tracking
+          job_cluster_key: monitoring_cluster
+          
+          libraries:
+            - pypi:
+                package: mlflow>=2.9.0
+            - pypi:
+                package: scikit-learn>=1.3.0
+          
+          spark_python_task:
+            python_file: src/monitoring/performance.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --model-name
+              - ${var.model_name}
+              - --scores-table
+              - ${var.catalog}.${var.schema}.fraud_scores
+              - --output-table
+              - ${var.catalog}.${var.schema}.performance_metrics
+          
+          timeout_seconds: 600  # 10 minutes
+        
+        # ========================================
+        # Task 4: Alert Generation
+        # ========================================
+        - task_key: generate_alerts
+          depends_on:
+            - task_key: psi_drift_detection
+            - task_key: fairness_monitoring
+            - task_key: performance_tracking
+          
+          job_cluster_key: monitoring_cluster
+          
+          spark_python_task:
+            python_file: src/monitoring/alerts.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --drift-table
+              - ${var.catalog}.${var.schema}.drift_monitoring
+              - --fairness-table
+              - ${var.catalog}.${var.schema}.fairness_monitoring
+              - --performance-table
+              - ${var.catalog}.${var.schema}.performance_metrics
+              - --notification-email
+              - ${var.notification_email}
+          
+          timeout_seconds: 300  # 5 minutes
+      
+      # Job cluster
+      job_clusters:
+        - job_cluster_key: monitoring_cluster
+          new_cluster:
+            cluster_name: ""
+            spark_version: ${var.cluster_spark_version}
+            node_type_id: i3.xlarge  # Smaller cluster for monitoring
+            num_workers: 1
+            
+            autoscale:
+              min_workers: 1
+              max_workers: 3
+            
+            spark_conf:
+              spark.databricks.delta.preview.enabled: "true"
+              spark.sql.adaptive.enabled: "true"
+            
+            autotermination_minutes: 10
+            
+            # Cost optimization
+            aws_attributes:
+              first_on_demand: 1
+              availability: SPOT_WITH_FALLBACK
+              zone_id: auto
+              spot_bid_price_percent: 100
+      
+      # Schedule - Run every 4 hours
+      schedule:
+        quartz_cron_expression: "0 0 */4 * * ?"  # Every 4 hours
+        timezone_id: "America/Los_Angeles"
+        pause_status: ${bundle.target == "dev" ? "PAUSED" : "UNPAUSED"}
+      
+      # Tags
+      tags:
+        Environment: ${bundle.target}
+        Project: claims-fraud-detection
+        Team: ml-engineering
+        Purpose: monitoring
