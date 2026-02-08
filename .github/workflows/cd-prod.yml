@@ -110,9 +110,7 @@ jobs:
   deploy-to-production:
     needs: deploy-to-staging
     runs-on: ubuntu-latest
-    environment: 
-      name: production
-      url: https://${{ secrets.DATABRICKS_HOST }}/#workflows
+    environment: production
     
     steps:
       - name: Checkout code
