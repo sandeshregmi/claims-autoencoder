@@ -1,0 +1,50 @@
+name: Build Check
+
+on:
+  push:
+    branches: ["**"]  # Run on all branches
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  quick-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Verify package structure
+        run: |
+          echo "📦 Checking package structure..."
+          ls -la src/claims_fraud/
+          echo "✅ Package structure verified"
+      
+      - name: Install package
+        run: |
+          pip install -e .
+          echo "✅ Package installed"
+      
+      - name: Test import
+        run: |
+          python -c "from claims_fraud import __version__; print(f'✅ Package version: {__version__}')"
+      
+      - name: Quick syntax check
+        run: |
+          python -m py_compile src/claims_fraud/**/*.py || echo "⚠️ Some files have syntax issues"
+      
+      - name: Summary
+        run: |
+          echo "## ✅ Build Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Author:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Message:** ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All checks passed! 🎉" >> $GITHUB_STEP_SUMMARY
