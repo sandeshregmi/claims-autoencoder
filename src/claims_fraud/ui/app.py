@@ -110,10 +110,10 @@ def load_model_and_config(model_type='catboost', config_path='config/example_con
 
 
 @st.cache_data
-def load_data(config):
+def load_data(_config):
     """Load training/validation data."""
     try:
-        data_ingestion = DataIngestion(config)
+        data_ingestion = DataIngestion(_config)
         train_df, val_df, test_df = data_ingestion.load_train_val_test()
         return train_df, val_df, test_df
     except Exception as e:
