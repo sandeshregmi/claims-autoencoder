@@ -235,9 +235,19 @@ def plot_claim_anomalies(per_feature_errors, claim_idx, fraud_score):
 def plot_top_claims_heatmap(per_feature_errors, top_indices, fraud_scores, feature_names):
     """Create heatmap of top fraudulent claims."""
     top_10_errors = []
+    # Filter feature_names to only those that exist in per_feature_errors
+    available_features = [f for f in feature_names if f in per_feature_errors]
+    
     for idx in top_indices[:10]:
-        errors = [per_feature_errors[feat][idx] for feat in feature_names]
+        errors = [per_feature_errors[feat][idx] if feat in per_feature_errors and idx < len(per_feature_errors[feat]) else 0.0 
+                  for feat in available_features]
         top_10_errors.append(errors)
+    
+    if not top_10_errors or not available_features:
+        # Return empty plot if no data
+        fig = go.Figure()
+        fig.add_annotation(text="No error data available", showarrow=False)
+        return fig
     
     heatmap_data = np.array(top_10_errors).T
     
@@ -247,7 +257,7 @@ def plot_top_claims_heatmap(per_feature_errors, top_indices, fraud_scores, featu
     fig = go.Figure(data=go.Heatmap(
         z=heatmap_normalized,
         x=[f"#{i+1} ({fraud_scores[idx]:,.0f})" for i, idx in enumerate(top_indices[:10])],
-        y=feature_names,
+        y=available_features,
         colorscale='YlOrRd',
         colorbar=dict(title="Normalized<br>Error")
     ))
@@ -334,7 +344,7 @@ def main():
         # Data loading
         st.header("📊 Data")
         
-        if st.session_state.config and st.button("📁 Load Training Data"):
+        if st.session_state.get('config') and st.button("📁 Load Training Data"):
             train_df, val_df, test_df = load_data(st.session_state.config)
             if val_df is not None:
                 st.session_state.train_data = train_df  # Store for PSI
@@ -344,7 +354,7 @@ def main():
                 st.info(f"📊 Training: {len(train_df)}, Test: {len(test_df)}")
         
         # Train model
-        if st.session_state.model and st.session_state.data is not None:
+        if st.session_state.get('model') and st.session_state.get('data') is not None:
             if st.button("🎓 Train Model"):
                 cat_features = st.session_state.config.data.categorical_features
                 num_features = st.session_state.config.data.numerical_features
@@ -358,7 +368,7 @@ def main():
                 st.success("✅ Model trained!")
         
         # Score claims
-        if st.session_state.model and st.session_state.data is not None:
+        if st.session_state.get('model') and st.session_state.get('data') is not None:
             if len(st.session_state.model.models) > 0:
                 if st.button("🎯 Compute Fraud Scores"):
                     with st.spinner("Computing fraud scores..."):
@@ -398,7 +408,7 @@ def main():
     with tab1:
         st.header("Fraud Detection Overview")
         
-        if st.session_state.fraud_scores is not None:
+        if st.session_state.get('fraud_scores') is not None:
             fraud_scores = st.session_state.fraud_scores
             
             # Key metrics
@@ -503,7 +513,7 @@ def main():
     with tab2:
         st.header("🚨 Most Suspicious Claims")
         
-        if st.session_state.fraud_scores is not None:
+        if st.session_state.get('fraud_scores') is not None:
             fraud_scores = st.session_state.fraud_scores
             data = st.session_state.data
             
@@ -571,7 +581,7 @@ def main():
     with tab3:
         st.header("📈 Feature Importance Analysis")
         
-        if st.session_state.model and len(st.session_state.model.models) > 0:
+        if st.session_state.get('model') and len(st.session_state.get('model', type('', (), {'models': []})).models) > 0:
             # Overall importance
             st.subheader("🎯 Overall Feature Importance")
             fig = plot_feature_importance(st.session_state.model)
@@ -585,7 +595,7 @@ def main():
             """)
             
             # Heatmap
-            if st.session_state.fraud_scores is not None:
+            if st.session_state.get('fraud_scores') is not None:
                 st.subheader("🔥 Top Claims Heatmap")
                 st.markdown("Shows which features are most anomalous across the top 10 fraudulent claims")
                 
@@ -604,7 +614,7 @@ def main():
     with tab4:
         st.header("🔍 Individual Claim Analysis")
         
-        if st.session_state.data is not None and st.session_state.fraud_scores is not None:
+        if st.session_state.get('data') is not None and st.session_state.get('fraud_scores') is not None:
             # Claim selector
             claim_idx = st.number_input(
                 "Enter Claim Index",
@@ -721,7 +731,7 @@ def main():
             **SHAP (SHapley Additive exPlanations)** - Understand why the model made specific predictions.
             """)
             
-            if st.session_state.model is None or st.session_state.data is None:
+            if st.session_state.get('model') is None or st.session_state.get('data') is None:
                 st.info("👈 Load model and data first")
             elif len(st.session_state.model.models) == 0:
                 st.info("👈 Train the model first")
@@ -753,10 +763,10 @@ def main():
                         
                         col1, col2 = st.columns([3, 1])
                         with col1:
-                            idx = st.number_input("Claim Index", 0, len(st.session_state.data)-1,
-                                                 int(st.session_state.fraud_scores.argmax()) if st.session_state.fraud_scores is not None else 0)
+                            idx = st.number_input("Claim Index", 0, len(st.session_state.get('data', pd.DataFrame()))-1,
+                                                 int(st.session_state.get('fraud_scores', type('', (), {'argmax': lambda: 0})).argmax()) if st.session_state.get('fraud_scores') is not None else 0)
                         with col2:
-                            if st.session_state.fraud_scores is not None:
+                            if st.session_state.get('fraud_scores') is not None:
                                 st.metric("Score", f"{st.session_state.fraud_scores[idx]:,.0f}")
                         
                         target = st.selectbox("Target Feature", st.session_state.model.feature_names)
@@ -1132,8 +1142,8 @@ def main():
                                     with st.expander("🔍 Diagnostic Information"):
                                         st.write("**Session State:**")
                                         st.write(f"- Model loaded: {st.session_state.model is not None}")
-                                        st.write(f"- Data loaded: {st.session_state.data is not None}")
-                                        if st.session_state.data is not None:
+                                        st.write(f"- Data loaded: {st.session_state.get('data') is not None}")
+                                        if st.session_state.get('data') is not None:
                                             st.write(f"- Data shape: {st.session_state.data.shape}")
                                         st.write(f"- SHAP explainer initialized: {st.session_state.shap_explainer is not None}")
                                         if st.session_state.shap_explainer is not None:
@@ -1142,7 +1152,7 @@ def main():
                     
                     else:  # Top Frauds
                         st.subheader("🚨 Top Frauds")
-                        if st.session_state.fraud_scores is None:
+                        if st.session_state.get('fraud_scores') is None:
                             st.warning("Compute fraud scores first")
                         else:
                             k = st.slider("Number of claims", 5, 50, 10)
@@ -1484,7 +1494,7 @@ def main():
         **Protected Attributes:** Gender, Age, Geographic Region, etc.
         """)
         
-        if st.session_state.data is None or st.session_state.fraud_scores is None:
+        if st.session_state.get('data') is None or st.session_state.get('fraud_scores') is None:
             st.info("👈 Please load data and compute fraud scores first")
             
             st.markdown("""
@@ -1861,7 +1871,7 @@ def main():
     with tab_export:
         st.header("📁 Export Results")
         
-        if st.session_state.fraud_scores is not None:
+        if st.session_state.get('fraud_scores') is not None:
             st.subheader("💾 Download Options")
             
             # Prepare export data

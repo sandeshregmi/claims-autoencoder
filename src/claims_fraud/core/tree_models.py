@@ -237,7 +237,15 @@ class ClaimsTreeAutoencoder:
                 codes = pd.Categorical(X_cat[col]).codes
                 # Replace -1 (unknown categories) with a valid code
                 codes = np.where(codes == -1, 0, codes)
-                X_cat[col] = codes
+                # Ensure it's a numeric dtype, not category
+                X_cat[col] = codes.astype(np.int32)
+        
+        # Also convert any remaining categorical columns to numeric
+        for col in X_cat.columns:
+            if pd.api.types.is_categorical_dtype(X_cat[col]):
+                codes = pd.Categorical(X_cat[col]).codes
+                codes = np.where(codes == -1, 0, codes)
+                X_cat[col] = codes.astype(np.int32)
         
         # Also handle NaN values in predictor features
         # Replace NaN with median for numeric, mode for categorical
@@ -248,11 +256,19 @@ class ClaimsTreeAutoencoder:
                     mode_val = X_cat[col].mode()[0] if not X_cat[col].mode().empty else 0
                     X_cat[col] = X_cat[col].fillna(mode_val)
                 else:
-                    # For numerical, use median
-                    median_val = X_cat[col].median()
-                    if pd.isna(median_val):
-                        median_val = 0.0
-                    X_cat[col] = X_cat[col].fillna(median_val)
+                    # For numerical, use median - but only if the column is actually numeric
+                    if pd.api.types.is_numeric_dtype(X_cat[col]):
+                        median_val = X_cat[col].median()
+                        if pd.isna(median_val):
+                            median_val = 0.0
+                        X_cat[col] = X_cat[col].fillna(median_val)
+                    else:
+                        # For non-numeric, use mode or a default value
+                        mode_val = X_cat[col].mode()
+                        if len(mode_val) > 0:
+                            X_cat[col] = X_cat[col].fillna(mode_val[0])
+                        else:
+                            X_cat[col] = X_cat[col].fillna(0)
         
         # Determine objective and create model
         if is_categorical:
@@ -276,22 +292,45 @@ class ClaimsTreeAutoencoder:
                 }
                 model = xgb.XGBClassifier(**params)
         else:
-            # Regression - ensure no NaN, inf values
-            y = np.array(y, dtype=np.float64)
-            if np.isnan(y).any() or np.isinf(y).any():
-                logger.error(f"  Feature '{target_name}': Target still contains NaN/inf after cleaning")
-                # Replace any remaining NaN/inf with median
-                valid_y = y[np.isfinite(y)]
-                if len(valid_y) > 0:
-                    median_val = np.median(valid_y)
-                    y = np.where(np.isfinite(y), y, median_val)
+            # Regression - but first check if target actually contains non-numeric values
+            # If so, treat as classification instead
+            if not pd.api.types.is_numeric_dtype(y):
+                # Target contains non-numeric values, convert to codes and treat as classification
+                y_codes = pd.Categorical(y).codes
+                y_codes = np.where(y_codes == -1, 0, y_codes)
+                n_classes = len(pd.Categorical(y).categories)
+                
+                if n_classes == 2:
+                    objective = "binary:logistic"
+                    params = {**self.model_params, 'objective': objective}
+                    params.pop('num_class', None)
+                    model = xgb.XGBClassifier(**params)
                 else:
-                    # Fallback to zero if all values are invalid
-                    y = np.zeros_like(y)
-            
-            params = {**self.model_params, 'objective': 'reg:squarederror'}
-            params.pop('num_class', None)
-            model = xgb.XGBRegressor(**params)
+                    objective = "multi:softprob"
+                    params = {
+                        **self.model_params,
+                        'objective': objective,
+                        'num_class': n_classes
+                    }
+                    model = xgb.XGBClassifier(**params)
+                y = y_codes
+            else:
+                # Numeric target - true regression
+                y = np.array(y, dtype=np.float64)
+                if np.isnan(y).any() or np.isinf(y).any():
+                    logger.error(f"  Feature '{target_name}': Target still contains NaN/inf after cleaning")
+                    # Replace any remaining NaN/inf with median
+                    valid_y = y[np.isfinite(y)]
+                    if len(valid_y) > 0:
+                        median_val = np.median(valid_y)
+                        y = np.where(np.isfinite(y), y, median_val)
+                    else:
+                        # Fallback to zero if all values are invalid
+                        y = np.zeros_like(y)
+                
+                params = {**self.model_params, 'objective': 'reg:squarederror'}
+                params.pop('num_class', None)
+                model = xgb.XGBRegressor(**params)
         
         # Train model (no enable_categorical needed)
         model.fit(X_cat, y, verbose=False)
@@ -329,11 +368,19 @@ class ClaimsTreeAutoencoder:
         # Also handle NaN in numerical features
         for col in X_cat.columns:
             if col not in cat_features and X_cat[col].isna().any():
-                # For numerical, use median
-                median_val = X_cat[col].median()
-                if pd.isna(median_val):
-                    median_val = 0.0
-                X_cat[col] = X_cat[col].fillna(median_val)
+                # For numerical, use median - but only if the column is actually numeric
+                if pd.api.types.is_numeric_dtype(X_cat[col]):
+                    median_val = X_cat[col].median()
+                    if pd.isna(median_val):
+                        median_val = 0.0
+                    X_cat[col] = X_cat[col].fillna(median_val)
+                else:
+                    # For non-numeric, use mode or a default value
+                    mode_val = X_cat[col].mode()
+                    if len(mode_val) > 0:
+                        X_cat[col] = X_cat[col].fillna(mode_val[0])
+                    else:
+                        X_cat[col] = X_cat[col].fillna('MISSING')
         
         # Get indices of categorical features
         cat_feature_indices = [
@@ -397,11 +444,19 @@ class ClaimsTreeAutoencoder:
                             mode_val = X_pred[col].mode()[0] if not X_pred[col].mode().empty else 0
                             X_pred[col] = X_pred[col].fillna(mode_val)
                         else:
-                            # For numerical, use median
-                            median_val = X_pred[col].median()
-                            if pd.isna(median_val):
-                                median_val = 0.0
-                            X_pred[col] = X_pred[col].fillna(median_val)
+                            # For numerical, use median - but only if the column is actually numeric
+                            if pd.api.types.is_numeric_dtype(X_pred[col]):
+                                median_val = X_pred[col].median()
+                                if pd.isna(median_val):
+                                    median_val = 0.0
+                                X_pred[col] = X_pred[col].fillna(median_val)
+                            else:
+                                # For non-numeric, use mode or a default value
+                                mode_val = X_pred[col].mode()
+                                if len(mode_val) > 0:
+                                    X_pred[col] = X_pred[col].fillna(mode_val[0])
+                                else:
+                                    X_pred[col] = X_pred[col].fillna(0)
             
             elif self.model_type == "catboost":
                 # CatBoost: Replace NaN in categorical with 'MISSING' (same as training)
@@ -413,10 +468,19 @@ class ClaimsTreeAutoencoder:
                 # Handle NaN in numerical features for CatBoost
                 for col in X_pred.columns:
                     if col not in cat_predictors and X_pred[col].isna().any():
-                        median_val = X_pred[col].median()
-                        if pd.isna(median_val):
-                            median_val = 0.0
-                        X_pred[col] = X_pred[col].fillna(median_val)
+                        # Only compute median if the column is numeric
+                        if pd.api.types.is_numeric_dtype(X_pred[col]):
+                            median_val = X_pred[col].median()
+                            if pd.isna(median_val):
+                                median_val = 0.0
+                            X_pred[col] = X_pred[col].fillna(median_val)
+                        else:
+                            # For non-numeric, use mode or a default value
+                            mode_val = X_pred[col].mode()
+                            if len(mode_val) > 0:
+                                X_pred[col] = X_pred[col].fillna(mode_val[0])
+                            else:
+                                X_pred[col] = X_pred[col].fillna(0)
             
             # Make prediction
             model = self.models[target_feature]
@@ -471,8 +535,15 @@ class ClaimsTreeAutoencoder:
                 error = np.where(pd.isna(actual), 1.0, (actual != predicted).astype(float))
             else:
                 # Regression error (squared difference)
+                # First, ensure actual is numeric (convert categorical to codes if needed)
+                if not pd.api.types.is_numeric_dtype(actual):
+                    actual_codes = pd.Categorical(actual).codes
+                    actual = np.where(actual_codes == -1, 0, actual_codes)
+                
                 # Handle NaN in actual values - use 0 error (no information)
-                error = np.where(pd.isna(actual), 0.0, (actual - predicted) ** 2)
+                actual_numeric = np.array(actual, dtype=np.float64)
+                predicted_numeric = np.array(predicted, dtype=np.float64)
+                error = np.where(pd.isna(actual_numeric), 0.0, (actual_numeric - predicted_numeric) ** 2)
             
             per_feature_errors[feature_name] = error
         
