@@ -4,6 +4,8 @@ import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
 import logging
+import hashlib
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,22 @@ class DictConfig:
             else:
                 result[key] = value
         return result
+    
+    def __hash__(self):
+        """Make hashable for Streamlit caching."""
+        # Convert to JSON string and hash it
+        json_str = json.dumps(self.to_dict(), sort_keys=True)
+        return int(hashlib.md5(json_str.encode()).hexdigest(), 16)
+    
+    def __eq__(self, other):
+        """Equality comparison for hashing."""
+        if not isinstance(other, DictConfig):
+            return False
+        return self.to_dict() == other.to_dict()
+    
+    def __repr__(self):
+        """String representation."""
+        return f"DictConfig({self.to_dict()})"
 
 
 class ConfigManager:
