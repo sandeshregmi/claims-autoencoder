@@ -1,24 +1,144 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # ENHANCED CLAIMS FRAUD DETECTION CONFIGURATION
-# All values configurable - NO hardcoded values in code!
+# Databricks-Ready | Fully Automated | 100% Config-Driven
 # Version: 2.0
-# Date: 2026-02-11
 # ═══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DATABRICKS CONFIGURATION (NEW!)
+# ═══════════════════════════════════════════════════════════════════════════
+databricks:
+  # Data source configuration
+  data_source:
+    type: "unity_catalog"  # Options: unity_catalog, delta_table, dbfs, external
+    
+    # Unity Catalog configuration
+    catalog: "machine_learning"  # Your catalog name
+    schema: "casetracker"        # Your schema name
+    
+    # Table/view names
+    tables:
+      claims: "claims"              # Main claims table
+      patients: "patients"          # Patient demographics
+      providers: "providers"        # Provider information
+      fraud_labels: "fraud_labels"  # Historical fraud labels (if available)
+    
+    # SQL query template (supports parameterization)
+    query_template: |
+      SELECT 
+        c.*,
+        p.patient_age,
+        p.patient_gender,
+        p.geographic_region,
+        pr.provider_specialty,
+        pr.provider_experience_years
+      FROM {catalog}.{schema}.{table} c
+      LEFT JOIN {catalog}.{schema}.patients p ON c.patient_id = p.patient_id
+      LEFT JOIN {catalog}.{schema}.providers pr ON c.provider_id = pr.provider_id
+      WHERE c.claim_date >= '{start_date}'
+        AND c.claim_date < '{end_date}'
+        {additional_filters}
+    
+    # Column mapping (map Databricks columns to expected feature names)
+    column_mapping:
+      claim_amount: "claim_amt"            # Databricks col -> config name
+      patient_age: "age"
+      provider_experience_years: "provider_exp_yrs"
+      claim_duration_days: "duration_days"
+      num_previous_claims: "prev_claim_count"
+      average_claim_amount: "avg_claim_amt"
+      days_since_last_claim: "days_since_last"
+      claim_type: "type"
+      provider_specialty: "specialty"
+      diagnosis_code: "diag_code"
+      procedure_code: "proc_code"
+      patient_gender: "gender"
+      geographic_region: "region"
+    
+    # Data filters
+    filters:
+      date_range:
+        enabled: true
+        start_date: "2024-01-01"  # Override at runtime
+        end_date: "2024-12-31"    # Override at runtime
+      additional_conditions: ""   # e.g., "AND claim_status = 'APPROVED'"
+  
+  # Cluster configuration
+  cluster:
+    spark_version: "13.3.x-scala2.12"
+    node_type_id: "i3.xlarge"
+    num_workers: 2
+    autoscale:
+      min_workers: 1
+      max_workers: 8
+    spark_conf:
+      "spark.databricks.delta.preview.enabled": "true"
+      "spark.sql.adaptive.enabled": "true"
+      "spark.sql.adaptive.coalescePartitions.enabled": "true"
+  
+  # Storage paths (DBFS or Unity Catalog Volumes)
+  storage:
+    use_volumes: true  # Use Unity Catalog Volumes (recommended)
+    volume_path: "/Volumes/machine_learning/casetracker/claims_fraud"
+    
+    # Legacy DBFS paths (if not using volumes)
+    dbfs_path: "/dbfs/FileStore/claims_fraud"
+    
+    # Paths within storage
+    paths:
+      data: "data"
+      models: "models"
+      checkpoints: "checkpoints"
+      logs: "logs"
+      outputs: "outputs"
+  
+  # Secrets management
+  secrets:
+    scope: "claims_fraud"  # Databricks secrets scope
+    keys:
+      database_password: "db_password"
+      api_key: "api_key"
+      mlflow_tracking_uri: "mlflow_uri"
+  
+  # MLflow on Databricks
+  mlflow:
+    use_databricks_tracking: true
+    experiment_location: "/Shared/claims_fraud/experiments"
+    model_registry_path: "models:/claims_fraud_autoencoder"
+  
+  # Jobs configuration
+  jobs:
+    training:
+      name: "claims_fraud_training"
+      schedule: "0 0 * * 0"  # Weekly on Sunday
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+    
+    batch_scoring:
+      name: "claims_fraud_scoring"
+      schedule: "0 2 * * *"  # Daily at 2 AM
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+    
+    monitoring:
+      name: "claims_fraud_monitoring"
+      schedule: "0 4 * * *"  # Daily at 4 AM
+      max_concurrent_runs: 1
+      timeout_seconds: 1800
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DATA CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 data:
-  # ─────────────────────────────────────────────────────────────────────────
-  # FILE PATHS
-  # ─────────────────────────────────────────────────────────────────────────
-  train_path: "data/claims_train.parquet"
-  val_path: null  # null = auto-split from train
-  test_path: null  # null = auto-split from train
+  # Data source (local or Databricks)
+  source: "databricks"  # Options: local, databricks, s3, azure, gcs
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # FEATURE LISTS
-  # ─────────────────────────────────────────────────────────────────────────
+  # Local file paths (when source='local')
+  train_path: "data/claims_train.parquet"
+  val_path: null
+  test_path: null
+  
+  # Features
   numerical_features:
     - claim_amount
     - patient_age
@@ -36,9 +156,7 @@ data:
     - patient_gender
     - geographic_region
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # FEATURE SCHEMAS (Data types, ranges, validation)
-  # ─────────────────────────────────────────────────────────────────────────
+  # Feature schemas
   feature_schemas:
     claim_amount:
       dtype: float
@@ -46,8 +164,7 @@ data:
       max_value: 1000000
       default_value: 0
       required: true
-      distribution: gamma
-      dist_params: {shape: 2, scale: 1000}
+      sql_type: "DECIMAL(10,2)"  # For Databricks schema
       
     patient_age:
       dtype: int
@@ -55,8 +172,7 @@ data:
       max_value: 120
       default_value: 45
       required: true
-      distribution: uniform
-      dist_params: {low: 18, high: 90}
+      sql_type: "INT"
       
     provider_experience_years:
       dtype: int
@@ -64,8 +180,7 @@ data:
       max_value: 50
       default_value: 10
       required: false
-      distribution: uniform
-      dist_params: {low: 0, high: 40}
+      sql_type: "INT"
       
     days_since_last_claim:
       dtype: float
@@ -73,8 +188,7 @@ data:
       max_value: 3650
       default_value: 30
       required: false
-      distribution: exponential
-      dist_params: {scale: 30}
+      sql_type: "INT"
       
     num_previous_claims:
       dtype: int
@@ -82,8 +196,7 @@ data:
       max_value: 100
       default_value: 0
       required: true
-      distribution: poisson
-      dist_params: {lam: 2}
+      sql_type: "INT"
       
     average_claim_amount:
       dtype: float
@@ -91,8 +204,7 @@ data:
       max_value: 500000
       default_value: 5000
       required: false
-      distribution: gamma
-      dist_params: {shape: 2, scale: 800}
+      sql_type: "DECIMAL(10,2)"
       
     claim_duration_days:
       dtype: int
@@ -100,48 +212,49 @@ data:
       max_value: 365
       default_value: 7
       required: true
-      distribution: uniform
-      dist_params: {low: 1, high: 60}
+      sql_type: "INT"
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # CATEGORICAL DOMAINS (Allowed values for each category)
-  # ─────────────────────────────────────────────────────────────────────────
+  # Categorical domains
   categorical_domains:
     claim_type:
       values: [medical, dental, vision, prescription, other]
       default: medical
       required: true
+      sql_type: "STRING"
       
     provider_specialty:
       values: [general, specialist, surgeon, pediatrics, orthopedics, cardiology, neurology]
       default: general
       required: false
+      sql_type: "STRING"
       
     diagnosis_code:
       values: [D001, D002, D003, D004, D005, D006, D007, D008, D009, D010]
       pattern: "D[0-9]{3}"
       default: D001
       required: true
+      sql_type: "STRING"
       
     procedure_code:
       values: [P001, P002, P003, P004, P005]
       pattern: "P[0-9]{3}"
       default: P001
       required: true
+      sql_type: "STRING"
       
     patient_gender:
       values: [M, F, O, Unknown]
       default: Unknown
       required: true
+      sql_type: "STRING"
       
     geographic_region:
       values: [North, South, East, West, Central, Northeast, Southeast, Northwest, Southwest]
       default: Central
       required: false
+      sql_type: "STRING"
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # DISPLAY NAMES (Human-readable labels for UI)
-  # ─────────────────────────────────────────────────────────────────────────
+  # Display names
   display_names:
     claim_amount: "Claim Amount ($)"
     patient_age: "Patient Age (years)"
@@ -157,9 +270,7 @@ data:
     patient_gender: "Patient Gender"
     geographic_region: "Geographic Region"
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # DATA QUALITY
-  # ─────────────────────────────────────────────────────────────────────────
+  # Data quality
   data_quality:
     default_missing_rate: 0.05
     missing_patterns:
@@ -170,111 +281,56 @@ data:
       num_previous_claims: 0.01
       average_claim_amount: 0.08
       claim_duration_days: 0.03
-      claim_type: 0.02
-      provider_specialty: 0.06
-      diagnosis_code: 0.01
-      procedure_code: 0.01
-      patient_gender: 0.02
-      geographic_region: 0.04
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # IMPUTATION
-  # ─────────────────────────────────────────────────────────────────────────
+  # Imputation
   imputation:
     numerical:
-      strategy: median  # Options: mean, median, most_frequent, constant
+      strategy: median
       fill_value: 0
     categorical:
       strategy: most_frequent
       fill_value: "Unknown"
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # OUTLIER TREATMENT
-  # ─────────────────────────────────────────────────────────────────────────
+  # Outlier treatment
   outlier_treatment:
     enabled: true
-    method: iqr  # Options: iqr, zscore, winsorize
+    method: iqr
     iqr:
       lower_quantile: 0.25
       upper_quantile: 0.75
       threshold_multiplier: 3.0
-    zscore:
-      threshold: 3.0
-    winsorize:
-      lower_percentile: 0.01
-      upper_percentile: 0.99
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # SCALING
-  # ─────────────────────────────────────────────────────────────────────────
+  # Scaling
   scaling:
-    method: robust  # Options: standard, robust, minmax, maxabs
+    method: robust
     with_centering: true
     with_scaling: true
-    quantile_range: [25, 75]
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # CATEGORICAL ENCODING
-  # ─────────────────────────────────────────────────────────────────────────
+  # Categorical encoding
   categorical_encoding:
-    method: label  # Options: label, onehot, target, ordinal
+    method: label
     handle_unknown: most_frequent
-    min_frequency: 0.01
-    max_categories: 50
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # FEATURE ENGINEERING
-  # ─────────────────────────────────────────────────────────────────────────
+  # Feature engineering
   feature_engineering:
     interactions:
       enabled: true
       pairs:
         - [claim_amount, patient_age]
         - [num_previous_claims, average_claim_amount]
-        - [claim_duration_days, claim_amount]
     derived_features:
       - name: claim_per_age
         formula: "claim_amount / (patient_age + 1)"
-        dtype: float
-      - name: days_per_claim
-        formula: "claim_duration_days / (num_previous_claims + 1)"
         dtype: float
       - name: claim_frequency
         formula: "num_previous_claims / (days_since_last_claim + 1)"
         dtype: float
   
-  # ─────────────────────────────────────────────────────────────────────────
-  # SPLIT RATIOS
-  # ─────────────────────────────────────────────────────────────────────────
+  # Split ratios
   split_ratios:
     train: 0.7
     val: 0.15
     test: 0.15
-  
-  # ─────────────────────────────────────────────────────────────────────────
-  # FILE FORMATS
-  # ─────────────────────────────────────────────────────────────────────────
-  file_formats:
-    parquet:
-      engine: pyarrow
-      compression: snappy
-      index: false
-    csv:
-      sep: ","
-      index: false
-      encoding: utf-8
-    pickle:
-      protocol: 4
-  
-  # ─────────────────────────────────────────────────────────────────────────
-  # SYNTHETIC DATA GENERATION
-  # ─────────────────────────────────────────────────────────────────────────
-  synthetic:
-    default_samples: 1000
-    random_seed: 42
-    apply_missing_values: true
-    apply_outliers: true
-    outlier_rate: 0.05
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BUSINESS RULES
@@ -285,61 +341,21 @@ business_rules:
     claim_amount_medium_risk: 50000
     max_claims_per_month: 5
     max_claims_per_week: 2
-    rapid_claims_days: 7
     patient_age_min: 0
     patient_age_max: 120
     suspicious_age_ranges:
       - [0, 1]
       - [100, 120]
-    min_provider_experience: 0
-    suspicious_low_experience: 1
     
   alert_triggers:
     high_value_claim: 100000
     rapid_claims_count: 10
-    rapid_claims_window_days: 7
-    duplicate_claim_threshold: 0.95
     
   validation_rules:
     max_claim_duration_days: 365
     min_claim_duration_days: 1
     require_diagnosis_code: true
     require_procedure_code: true
-
-# ═══════════════════════════════════════════════════════════════════════════
-# UI CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════
-ui:
-  dashboard:
-    title: "Claims Fraud Detection Dashboard"
-    port: 8501
-    host: localhost
-    theme: light
-    
-  plots:
-    default_height: 600
-    default_width: 800
-    show_gridlines: true
-    color_scheme:
-      fraud: "#ff0000"
-      normal: "#00ff00"
-      warning: "#ffaa00"
-      info: "#0088cc"
-      critical: "#cc0000"
-    fraud_score_distribution:
-      bins: 50
-      show_percentiles: [95, 99]
-      
-  table_display:
-    max_rows: 100
-    rows_per_page: 25
-    show_index: false
-    float_precision: 2
-    
-  export:
-    default_format: csv
-    include_fraud_scores: true
-    include_percentiles: true
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MODEL CONFIGURATION
@@ -360,80 +376,18 @@ training:
   learning_rate: 0.001
   weight_decay: 0.0001
   optimizer: adam
-  lr_scheduler:
-    enabled: true
-    type: reduce_on_plateau
-    patience: 10
-    factor: 0.5
-    min_lr: 0.00001
   max_epochs: 100
-  early_stopping:
-    enabled: true
-    patience: 15
-    min_delta: 0.001
-    monitor: val_loss
-  gradient_clip_val: 1.0
   seed: 42
   deterministic: true
-  accelerator: auto
-  devices: 1
-  precision: "32"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MLFLOW CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 mlflow:
   enabled: true
-  tracking_uri: mlruns
-  experiment_name: claims_autoencoder
+  tracking_uri: "databricks"  # Use Databricks MLflow
+  experiment_name: "/Shared/claims_fraud/experiments/autoencoder"
   run_name: null
-  log_params: true
-  log_metrics: true
-  log_artifacts: true
-  log_model: true
-  tags:
-    project: fraud_detection
-    team: data_science
-    environment: development
-
-# ═══════════════════════════════════════════════════════════════════════════
-# EVALUATION CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════
-evaluation:
-  metrics:
-    - reconstruction_error
-    - anomaly_detection_rate
-    - precision_at_k
-    - recall_at_k
-  k_values: [10, 50, 100]
-  plot_distributions: true
-  plot_roc_curve: true
-  save_plots: true
-  plots_dir: outputs/plots
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MONITORING CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════
-monitoring:
-  psi:
-    enabled: true
-    num_bins: 10
-    thresholds:
-      minor: 0.1
-      major: 0.2
-  drift_detection:
-    enabled: true
-    check_frequency: daily
-    alert_threshold: 0.2
-
-# ═══════════════════════════════════════════════════════════════════════════
-# BATCH SCORING CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════
-batch_scoring:
-  chunk_size: 10000
-  num_workers: 4
-  save_reconstructions: false
-  output_format: parquet
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PATHS CONFIGURATION
@@ -444,7 +398,6 @@ paths:
   outputs_dir: outputs
   logs_dir: logs
   checkpoints_dir: checkpoints
-  exports_dir: exports
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LOGGING CONFIGURATION
@@ -454,5 +407,3 @@ logging:
   log_file: logs/training.log
   log_to_console: true
   log_to_file: true
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  date_format: "%Y-%m-%d %H:%M:%S"
