@@ -5,10 +5,10 @@ Setup script for claims-autoencoder package
 from setuptools import setup, find_packages
 
 setup(
-    name="claims-autoencoder",
-    version="1.0.0",
-    description="Claims Autoencoder for Anomaly Detection",
-    author="Your Name",
+    name="claims-fraud-detection",
+    version="0.1.0",
+    description="Claims Fraud Detection with Tree-based Autoencoders",
+    author="Sandesh Regmi",
     packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[

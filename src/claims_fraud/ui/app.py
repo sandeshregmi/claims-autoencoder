@@ -24,13 +24,18 @@ from claims_fraud.analysis.monitoring import PSIMonitor
 
 # Try to import SHAP
 try:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
     import shap
     from shap_explainer import ClaimsShapExplainer
     SHAP_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     SHAP_AVAILABLE = False
     shap = None
     ClaimsShapExplainer = None
+    import logging
+    logging.debug(f"SHAP import failed: {e}")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -358,7 +363,11 @@ def main():
             if st.button("🎓 Train Model"):
                 cat_features = st.session_state.config.data.categorical_features
                 num_features = st.session_state.config.data.numerical_features
-                
+
+                for col in st.session_state.data.columns:
+                    if pd.api.types.is_categorical_dtype(st.session_state.data[col]):
+                        st.session_state.data[col] = st.session_state.data[col].astype(str)
+                        
                 st.session_state.model = train_model_cached(
                     st.session_state.model,
                     st.session_state.data,
@@ -827,7 +836,7 @@ def main():
                                         )
                                         fig.add_vline(x=0, line_color='black', line_width=1.5)
                                         fig.update_yaxes(autorange="reversed")
-                                        st.plotly_chart(fig, use_container_width=True, key=f"waterfall_{idx}")
+                                        st.plotly_chart(fig, width="stretch", key=f"waterfall_{idx}")
                                         
                                         st.info("🔴 Red = increases | 🔵 Blue = decreases")
                                     
@@ -967,7 +976,7 @@ def main():
                                                     zerolinewidth=1
                                                 )
                                                 
-                                                st.plotly_chart(fig_force, use_container_width=True, key=f"force_{idx}_{target}")
+                                                st.plotly_chart(fig_force, width="stretch", key=f"force_{idx}_{target}")
                                                 
                                                 # Summary
                                                 col1, col2, col3 = st.columns(3)
@@ -1013,7 +1022,7 @@ def main():
                                             height=600
                                         )
                                         fig_bar.update_yaxes(autorange="reversed")
-                                        st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{idx}")
+                                        st.plotly_chart(fig_bar, width="stretch", key=f"bar_{idx}")
                                     
                                     # ═══════════════════════════════════════
                                     # DECISION PLOT
@@ -1114,7 +1123,7 @@ def main():
                                     progress_bar.progress(1.0)
                                     status_text.text("✅ Complete!")
                                     
-                                    st.plotly_chart(fig, use_container_width=True, key="global_importance_chart")
+                                    st.plotly_chart(fig, width="stretch", key="global_importance_chart")
                                     
                                     # Show full table
                                     st.markdown("### 📋 All Features Ranked")
@@ -1384,7 +1393,7 @@ def main():
                 )
                 fig.update_yaxes(autorange="reversed")
                 
-                st.plotly_chart(fig, use_container_width=True, key="psi_scores_chart")
+                st.plotly_chart(fig, width="stretch", key="psi_scores_chart")
                 
                 # Legend
                 col1, col2, col3 = st.columns(3)
@@ -1451,7 +1460,7 @@ def main():
                         showlegend=True
                     )
                     
-                    st.plotly_chart(fig_dist, use_container_width=True, key=f"dist_comparison_{selected_feature}")
+                    st.plotly_chart(fig_dist, width="stretch", key=f"dist_comparison_{selected_feature}")
                     
                     # Interpretation
                     if feature_psi >= 0.2:
@@ -1469,7 +1478,7 @@ def main():
                     lambda x: 'Major Drift' if x >= 0.2 else ('Minor Drift' if x >= 0.1 else 'Stable')
                 )
                 
-                st.dataframe(psi_df, height=400, use_container_width=True)
+                st.dataframe(psi_df, height=400)
                 
                 # Download button
                 st.download_button(
@@ -1679,7 +1688,7 @@ def main():
                         'Fairness Score', 'Status'
                     ]
                     
-                    st.dataframe(display_summary, use_container_width=True, height=300)
+                    st.dataframe(display_summary, height=300)
                     
                     st.info("""
                     **Disparate Impact (DI) Ratio Guide:**
@@ -1721,7 +1730,7 @@ def main():
                                 'Avg Score', 'Median Score', 'P95 Score', 'P99 Score'
                             ]
                             
-                            st.dataframe(display_df, use_container_width=True)
+                            st.dataframe(display_df)
                             
                             # Visualizations
                             col1, col2 = st.columns(2)
@@ -1743,7 +1752,7 @@ def main():
                                     height=400
                                 )
                                 
-                                st.plotly_chart(fig_flag, use_container_width=True, key=f"flag_rate_{selected_attr}")
+                                st.plotly_chart(fig_flag, width="stretch", key=f"flag_rate_{selected_attr}")
                             
                             with col2:
                                 # Average score comparison
@@ -1762,7 +1771,7 @@ def main():
                                     height=400
                                 )
                                 
-                                st.plotly_chart(fig_score, use_container_width=True, key=f"avg_score_{selected_attr}")
+                                st.plotly_chart(fig_score, width="stretch", key=f"avg_score_{selected_attr}")
                         
                         # Pairwise Comparisons
                         if 'pairwise_comparisons' in attr_results and attr_results['pairwise_comparisons']:
